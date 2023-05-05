@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/rmaylor-base/transform/pkg/primitive"
@@ -30,27 +32,38 @@ func main() {
 			return
 		}
 		defer file.Close()
-		// Actually use this:
 		ext := filepath.Ext(header.Filename)[1:]
-		// _ = ext
-		out, err := primitive.Transform(file, ext, 100)
+		out, err := primitive.Transform(file, ext, 100, primitive.WithMode(primitive.ModeRotatedRect))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		switch ext {
-		case "jpg":
-			fallthrough
-		case "jpeg":
-			w.Header().Set("Content-Type", "image/jpeg")
-		case "png":
-			w.Header().Set("Content-Type", "image/png")
-		default:
-			http.Error(w, "Invalid image type", http.StatusBadRequest)
+		outFile, err := tempFile("", ext)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		io.Copy(w, out)
+		defer outFile.Close()
+		io.Copy(outFile, out)
+		redirURL := fmt.Sprintf("/%s", outFile.Name())
+		http.Redirect(w, r, redirURL, http.StatusFound)
 	})
-
+	fs := http.FileServer(http.Dir("./img/"))
+	mux.Handle("/img/", http.StripPrefix("/img/", fs))
 	log.Fatal(http.ListenAndServe(":3000", mux))
+}
+
+func tempFile(prefix, ext string) (*os.File, error) {
+	var in *os.File
+	var err error
+	in, err = os.CreateTemp("./img/", prefix)
+	if err != nil {
+		return nil, errors.New("main: failed to create temp file")
+	}
+	defer in.Close()
+	if err = in.Close(); err != nil {
+		panic(err)
+	}
+	defer os.Remove(in.Name())
+	return os.Create(fmt.Sprintf("%s.%s", in.Name(), ext))
 }
